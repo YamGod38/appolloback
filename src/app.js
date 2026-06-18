@@ -1,0 +1,56 @@
+const express = require('express');
+const cors = require('cors');
+const helmet = require('helmet');
+const rateLimit = require('express-rate-limit');
+
+const app = express();
+
+// Security Headers
+app.use(helmet());
+
+// Restrict CORS to frontend
+app.use(cors({
+    origin: 'http://localhost:5173', // Restrict from '*' to exact frontend URL
+    methods: ['GET', 'POST', 'PUT', 'DELETE'],
+    credentials: true
+}));
+
+app.use(express.json());
+app.use(express.urlencoded({ extended: true }));
+
+// Rate Limiter for Login Endpoint (Max 5 attempts per 15 minutes)
+const loginLimiter = rateLimit({
+    windowMs: 15 * 60 * 1000, 
+    max: 5, 
+    message: { error: 'Too many login attempts from this IP, please try again after 15 minutes' },
+    standardHeaders: true,
+    legacyHeaders: false,
+});
+
+const exotelRoutes = require('./routes/exotelRoutes');
+const kbRoutes = require('./routes/kbRoutes');
+const patientRoutes = require('./routes/patientRoutes');
+const authRoutes = require('./routes/authRoutes');
+const aiRoutes = require('./routes/aiRoutes');
+const messageRoutes = require('./routes/messageRoutes');
+const securityRoutes = require('./routes/securityRoutes');
+
+// Serve uploaded files statically
+app.use('/uploads', express.static('uploads'));
+
+// Basic health check route
+app.get('/health', (req, res) => {
+    res.status(200).json({ status: 'ok', message: 'Backend is running smoothly' });
+});
+
+// Routes
+app.use('/api/auth/login', loginLimiter); // Apply rate limiter
+app.use('/api/auth', authRoutes);
+app.use('/api/exotel', exotelRoutes);
+app.use('/api/kb', kbRoutes);
+app.use('/api/patients', patientRoutes);
+app.use('/api/ai', aiRoutes);
+app.use('/api/messages', messageRoutes);
+app.use('/api/security', securityRoutes);
+
+module.exports = app;
