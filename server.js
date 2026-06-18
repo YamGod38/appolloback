@@ -10,7 +10,7 @@ const server = http.createServer(app);
 
 const io = new Server(server, {
     cors: {
-        origin: 'http://localhost:5173',
+        origin: '*', // Allow all origins for the websocket to easily connect from Netlify
         methods: ['GET', 'POST'],
         credentials: true
     }

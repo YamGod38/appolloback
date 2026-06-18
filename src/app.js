@@ -9,7 +9,11 @@ const app = express();
 app.use(helmet());
 
 // Restrict CORS to frontend
-const allowedOrigins = ['http://localhost:5173', 'https://papaya-puppy-5a9cb7.netlify.app'];
+const allowedOrigins = [
+    'http://localhost:5173', 
+    'https://papaya-puppy-5a9cb7.netlify.app',
+    'https://appolloritik.netlify.app'
+];
 app.use(cors({
     origin: function(origin, callback){
         // allow requests with no origin (like mobile apps or curl requests)
