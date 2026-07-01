@@ -6,8 +6,23 @@ class ExotelController {
     static async handleIncomingCall(req, res) {
         try {
             const { CallSid, From, To, Direction } = req.body;
+            const routingState = req.app.get('globalCallRouting') || 'live';
             
-            console.log(`[Exotel Webhook] Incoming Call - SID: ${CallSid}, From: ${From}`);
+            console.log(`[Exotel Webhook] Incoming Call - SID: ${CallSid}, From: ${From} | State: ${routingState}`);
+
+            res.set('Content-Type', 'text/xml');
+
+            if (routingState === 'offline') {
+                console.log(`[Exotel Webhook] System is offline. Hanging up.`);
+                return res.send('<?xml version="1.0" encoding="UTF-8"?><Response><Hangup/></Response>');
+            }
+
+            if (routingState === 'forward') {
+                const receptionNumber = process.env.RECEPTION_MOBILE_NUMBER || '09876543210';
+                console.log(`[Exotel Webhook] System is in Forward mode. Forwarding to Reception: ${receptionNumber}`);
+                const xmlResponse = ExotelXmlGenerator.generateDialFailover(receptionNumber);
+                return res.send(xmlResponse);
+            }
 
             let customer = null;
             let customerId = null;
@@ -36,7 +51,8 @@ class ExotelController {
                     primary_condition: 'Cardiac Arrhythmia',
                     outstanding_balance: '$1,250.00',
                     loyalty_tier: 'Platinum',
-                    assigned_specialist: 'Dr. Sarah Chen'
+                    assigned_specialist: 'Dr. Sarah Chen',
+                    huid: 'APL-' + Math.floor(100000 + Math.random() * 900000)
                 };
             }
 
@@ -59,10 +75,16 @@ class ExotelController {
                 console.error('[Exotel Webhook] Failed to check agent status. Assuming 1 online agent.', dbErr.message);
             }
 
-            res.set('Content-Type', 'text/xml');
-
             if (agentsOnlineCount === 0) {
-                console.log(`[Exotel Webhook] NO AGENTS ONLINE! Routing to emergency fallback for SID: ${CallSid}`);
+                console.log(`[Exotel Webhook] NO AGENTS ONLINE! Pushing to missed call queue for SID: ${CallSid}`);
+                
+                if (io) {
+                    io.emit('ADD_MISSED_CALL', {
+                        callerNumber: From,
+                        callSid: CallSid
+                    });
+                }
+
                 const fallbackNumber = process.env.FALLBACK_MOBILE_NUMBER || '09876543210';
                 const xmlResponse = ExotelXmlGenerator.generateDialFailover(fallbackNumber);
                 return res.send(xmlResponse);

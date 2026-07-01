@@ -47,6 +47,11 @@ const authRoutes = require('./routes/authRoutes');
 const aiRoutes = require('./routes/aiRoutes');
 const messageRoutes = require('./routes/messageRoutes');
 const securityRoutes = require('./routes/securityRoutes');
+const hotelRoutes = require('./routes/hotelRoutes');
+const leadRoutes = require('./routes/leadRoutes');
+const whatsappRoutes = require('./routes/whatsappRoutes');
+const callRoutes = require('./routes/callRoutes');
+const attendanceRoutes = require('./routes/attendanceRoutes');
 
 // Serve uploaded files statically
 app.use('/uploads', express.static('uploads'));
@@ -65,5 +70,9 @@ app.use('/api/patients', patientRoutes);
 app.use('/api/ai', aiRoutes);
 app.use('/api/messages', messageRoutes);
 app.use('/api/security', securityRoutes);
-
+app.use('/api/hotels', hotelRoutes);
+app.use('/api/leads', leadRoutes);
+app.use('/api/whatsapp', whatsappRoutes);
+app.use('/api/calls', callRoutes);
+app.use('/api/attendance', attendanceRoutes);
 module.exports = app;

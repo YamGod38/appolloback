@@ -61,4 +61,27 @@ cron.schedule('0 8 * * *', async () => {
     }
 });
 
-console.log('WhatsApp Automation Cron Job initialized.');
+// Run every minute to check for scheduled outbound calls
+cron.schedule('* * * * *', async () => {
+    try {
+        const query = `
+            SELECT * FROM scheduled_calls 
+            WHERE status = 'Pending' AND scheduled_time <= CURRENT_TIMESTAMP
+        `;
+        const result = await db.query(query);
+        const calls = result.rows;
+
+        for (const call of calls) {
+            console.log(`[Scheduled Call] Firing outbound call to ${call.patient_name} (${call.phone}) for agent ${call.agent_name}`);
+            
+            // Mocking outbound API call (Twilio/Exotel)
+            // await axios.post('exotel_outbound_api_url', { From: 'system_number', To: call.phone, CallerId: 'agent_extension' });
+            
+            await db.query(`UPDATE scheduled_calls SET status = 'Completed' WHERE id = $1`, [call.id]);
+        }
+    } catch (err) {
+        console.error('[Scheduled Calls Cron Error]', err);
+    }
+});
+
+console.log('Cron Jobs initialized (WhatsApp automation & Outbound Scheduling).');

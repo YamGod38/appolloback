@@ -89,6 +89,39 @@ const executeMigration = async () => {
         `);
 
         console.log('[DB] Seeding default Admin and Agent users...');
+
+        // 6. Missed Calls Table
+        await pool.query(`
+            CREATE TABLE IF NOT EXISTS missed_calls (
+                id SERIAL PRIMARY KEY,
+                phone VARCHAR(50) NOT NULL,
+                status VARCHAR(50) DEFAULT 'Pending',
+                timestamp TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            );
+        `);
+
+        // 7. Attendance Logs Table
+        await pool.query(`
+            CREATE TABLE IF NOT EXISTS attendance_logs (
+                id SERIAL PRIMARY KEY,
+                agent_name VARCHAR(255) NOT NULL,
+                action VARCHAR(50) NOT NULL,
+                timestamp TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            );
+        `);
+
+        // 8. Scheduled Calls Table
+        await pool.query(`
+            CREATE TABLE IF NOT EXISTS scheduled_calls (
+                id SERIAL PRIMARY KEY,
+                patient_name VARCHAR(255),
+                phone VARCHAR(50) NOT NULL,
+                agent_name VARCHAR(255),
+                scheduled_time TIMESTAMP NOT NULL,
+                status VARCHAR(50) DEFAULT 'Scheduled',
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            );
+        `);
         const adminHash = await bcrypt.hash('admin', 10);
         const agentHash = await bcrypt.hash('agent', 10);
 

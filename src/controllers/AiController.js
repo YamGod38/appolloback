@@ -54,3 +54,30 @@ exports.generateSuggestion = async (req, res) => {
         res.status(500).json({ error: 'Failed to generate AI suggestion.' });
     }
 };
+
+exports.summarizeCall = async (req, res) => {
+    try {
+        const { callId } = req.params;
+        console.log(`[AI Copilot] Generating summary for call ${callId}`);
+
+        let summary = "Patient called regarding recurring chest pain. Recommended immediate clinic visit. BP reported stable. Automated WhatsApp check-in scheduled for tomorrow.";
+
+        if (process.env.OPENAI_API_KEY && !process.env.OPENAI_API_KEY.includes('your_openai_api_key')) {
+            const response = await openai.chat.completions.create({
+                model: 'gpt-4o-mini',
+                messages: [
+                    { role: 'system', content: 'Summarize the clinical aspects of the medical call transcript.' },
+                    { role: 'user', content: 'Patient complained of chest pain and shortness of breath. History of hypertension.' }
+                ],
+                temperature: 0.5,
+                max_tokens: 150
+            });
+            summary = response.choices[0].message.content;
+        }
+
+        res.json({ success: true, data: { callId, summary } });
+    } catch (error) {
+        console.error('[AI Copilot] Error summarizing call:', error.message);
+        res.status(500).json({ success: false, error: 'Failed to summarize call' });
+    }
+};

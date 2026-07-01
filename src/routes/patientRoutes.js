@@ -58,6 +58,88 @@ router.post('/:id/upload', authMiddleware(), upload.single('prescription'), asyn
     }
 });
 
+// Mock Data for HUID functionality (in-memory)
+let mockPatients = [
+    { id: 1, huid: 'AP-102948', name: 'John Doe', phone: '+1 (555) 123-0099', family_members: [], prescription_urls: ['https://mock-apollo-crm-storage.s3.amazonaws.com/prescriptions/sample-bill.pdf'] },
+    { id: 2, huid: 'AP-839201', name: 'Emma Watson', phone: '+1 (555) 882-3341', family_members: [{ id: 1, name: 'Tom Watson', relation: 'Son', age: 12 }], prescription_urls: [] }
+];
+
+// GET /api/patients/search?query=...
+router.get('/search', authMiddleware(), async (req, res) => {
+    try {
+        const { query } = req.query;
+        if (!query) return res.json({ success: false, message: 'No search query provided' });
+
+        // Try DB first
+        try {
+            const dbRes = await db.query('SELECT id, huid, full_name as name, phone_number as phone, prescription_urls FROM customers_patients WHERE huid = $1 OR phone_number = $1', [query]);
+            if (dbRes.rows.length > 0) {
+                const patient = dbRes.rows[0];
+                const familyRes = await db.query('SELECT * FROM family_members WHERE primary_huid = $1', [patient.huid]);
+                return res.json({ success: true, data: { ...patient, family_members: familyRes.rows } });
+            }
+        } catch (dbErr) {
+            console.warn('[Patients API] Database offline. Using mock search.');
+        }
+
+        // Mock fallback
+        const mockMatch = mockPatients.find(p => p.huid === query || p.phone === query);
+        if (mockMatch) {
+            res.json({ success: true, data: mockMatch });
+        } else {
+            res.json({ success: false, message: 'Patient not found' });
+        }
+    } catch (err) {
+        res.status(500).json({ success: false, error: 'Failed to search' });
+    }
+});
+
+// POST /api/patients/:huid/family
+router.post('/:huid/family', authMiddleware(), async (req, res) => {
+    try {
+        const { huid } = req.params;
+        const { name, relation, age } = req.body;
+
+        try {
+            const dbRes = await db.query('INSERT INTO family_members (primary_huid, name, relation, age) VALUES ($1, $2, $3, $4) RETURNING *', [huid, name, relation, age]);
+            return res.json({ success: true, data: dbRes.rows[0] });
+        } catch (dbErr) {
+            console.warn('[Patients API] Database offline. Modifying mock data.');
+        }
+
+        const patient = mockPatients.find(p => p.huid === huid);
+        if (patient) {
+            const newMember = { id: Date.now(), name, relation, age };
+            patient.family_members.push(newMember);
+            res.json({ success: true, data: newMember });
+        } else {
+            res.status(404).json({ success: false, message: 'Primary HUID not found' });
+        }
+    } catch (err) {
+        res.status(500).json({ success: false, error: 'Failed to add family member' });
+    }
+});
+
+// GET /api/patients/:huid/files
+router.get('/:huid/files', authMiddleware(), async (req, res) => {
+    try {
+        const { huid } = req.params;
+        try {
+            const dbRes = await db.query('SELECT prescription_urls FROM customers_patients WHERE huid = $1', [huid]);
+            if (dbRes.rows.length > 0) {
+                return res.json({ success: true, data: dbRes.rows[0].prescription_urls || [] });
+            }
+        } catch (dbErr) {
+            // DB Offline
+        }
+
+        const mockMatch = mockPatients.find(p => p.huid === huid);
+        res.json({ success: true, data: mockMatch ? mockMatch.prescription_urls : [] });
+    } catch (err) {
+        res.status(500).json({ success: false, error: 'Failed to fetch files' });
+    }
+});
+
 // GET /api/patients/:phone/history
 router.get('/:phone/history', authMiddleware(), async (req, res) => {
     try {
