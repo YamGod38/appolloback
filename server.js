@@ -16,6 +16,19 @@ const io = new Server(server, {
     }
 });
 
+const jwt = require('jsonwebtoken');
+io.use((socket, next) => {
+    const token = socket.handshake.auth?.token;
+    if (!token) {
+        return next(new Error('Authentication error: Token missing'));
+    }
+    jwt.verify(token, process.env.JWT_SECRET, (err, decoded) => {
+        if (err) return next(new Error('Authentication error: Invalid token'));
+        socket.user = decoded;
+        next();
+    });
+});
+
 app.set('io', io);
 app.set('globalCallRouting', 'live'); // 'live', 'forward', 'offline'
 
@@ -35,10 +48,21 @@ let doctors = [
     { id: 'd4', name: 'Dr. James Wilson', spec: 'General Practice', status: 'Off Duty' }
 ];
 
+// Live Diagnostic Scans Configuration
+let scanTypes = [
+    { id: 'mri', name: 'MRI Scan', prep: 'Fasting 4 hours prior. Remove all metal objects.', duration: '45 mins' },
+    { id: 'ct', name: 'CT Scan', prep: 'Clear liquid diet. Contrast dye may be used.', duration: '30 mins' },
+    { id: 'xray', name: 'X-Ray', prep: 'No special preparation needed.', duration: '15 mins' },
+    { id: 'usg', name: 'Ultrasound', prep: 'Drink 1 liter of water 1 hour before.', duration: '20 mins' }
+];
+
 let attendanceLogs = [];
 let recentBookings = [];
 let recentHotelBookings = [];
+let recentScanBookings = [];
+let allBookings = []; // Unified list for Reception feed
 let missedCalls = []; // In-memory missed calls queue
+let adminMemo = "MRI Room B is undergoing scheduled maintenance until 2:00 PM. Route all acute trauma to Room A.";
 app.set('missedCalls', missedCalls);
 
 db.pool.connect((err, client, release) => {
@@ -55,16 +79,22 @@ io.on('connection', (socket) => {
     // Blast initial state to dashboard on connect
     socket.emit('AGENT_STATUS_UPDATE', agents);
     socket.emit('DOCTOR_STATUS_SYNC', doctors);
+    socket.emit('SCAN_TYPES_SYNC', scanTypes);
     socket.emit('ROUTING_STATE_SYNC', app.get('globalCallRouting'));
+    socket.emit('ADMIN_MEMO_SYNC', adminMemo);
 
     // Provide state on demand for late-mounting components
     socket.on('GET_INITIAL_STATE', () => {
         socket.emit('AGENT_STATUS_UPDATE', agents);
         socket.emit('DOCTOR_STATUS_SYNC', doctors);
+        socket.emit('SCAN_TYPES_SYNC', scanTypes);
         socket.emit('ATTENDANCE_LOG_SYNC', attendanceLogs);
         socket.emit('BOOKING_SYNC', recentBookings);
         socket.emit('HOTEL_BOOKING_SYNC', recentHotelBookings);
+        socket.emit('SCAN_BOOKING_SYNC', recentScanBookings);
+        socket.emit('ALL_BOOKINGS_SYNC', allBookings);
         socket.emit('ROUTING_STATE_SYNC', app.get('globalCallRouting'));
+        socket.emit('ADMIN_MEMO_SYNC', adminMemo);
     });
 
     // Listen for admin updating routing state
@@ -132,11 +162,40 @@ io.on('connection', (socket) => {
         console.log(`[Socket] Doctor removed: ${id}`);
     });
 
+    // Listen for adding a new scan type
+    socket.on('ADD_SCAN_TYPE', (newScan) => {
+        const scan = {
+            id: `scan_${Date.now()}`,
+            name: newScan.name,
+            prep: newScan.prep,
+            duration: newScan.duration
+        };
+        scanTypes.push(scan);
+        io.emit('SCAN_TYPES_SYNC', scanTypes);
+        console.log(`[Socket] New scan type added: ${scan.name}`);
+    });
+
+    // Listen for removing a scan type
+    socket.on('REMOVE_SCAN_TYPE', (id) => {
+        scanTypes = scanTypes.filter(s => s.id !== id);
+        io.emit('SCAN_TYPES_SYNC', scanTypes);
+        console.log(`[Socket] Scan type removed: ${id}`);
+    });
+
+    // Listen for Admin Memo Updates
+    socket.on('UPDATE_ADMIN_MEMO', (memo) => {
+        adminMemo = memo;
+        io.emit('ADMIN_MEMO_SYNC', adminMemo);
+        console.log(`[Socket] Admin Memo updated: ${memo}`);
+    });
+
     // --- NEW: Admin Tracking Events --- //
     // Emit initial states
     socket.emit('ATTENDANCE_LOG_SYNC', attendanceLogs);
     socket.emit('BOOKING_SYNC', recentBookings);
     socket.emit('HOTEL_BOOKING_SYNC', recentHotelBookings);
+    socket.emit('SCAN_BOOKING_SYNC', recentScanBookings);
+    socket.emit('ALL_BOOKINGS_SYNC', allBookings);
     socket.emit('MISSED_CALLS_SYNC', missedCalls);
 
     socket.on('AGENT_CLOCK_IN', async (data) => {
@@ -160,20 +219,71 @@ io.on('connection', (socket) => {
 
     socket.on('BOOKING_MADE', (data) => {
         // data: { patientName: 'John Doe', doctor: 'dr_smith', date: '...', time: '...' }
-        const booking = { id: Date.now(), ...data };
+        const booking = { id: Date.now(), type: 'APPOINTMENT', status: 'Pending', ...data };
         recentBookings.unshift(booking);
         if (recentBookings.length > 50) recentBookings.pop();
         io.emit('BOOKING_SYNC', recentBookings);
-        console.log(`[Socket] New booking for ${data.patientName}`);
+
+        allBookings.unshift(booking);
+        if (allBookings.length > 100) allBookings.pop();
+        io.emit('ALL_BOOKINGS_SYNC', allBookings);
+        
+        console.log(`[Socket] New appointment booking for ${data.patientName}`);
     });
 
     socket.on('HOTEL_BOOKING_MADE', (data) => {
         // data: { patientName: 'John Doe', hotel: 'The Grand', roomType: '...', checkIn: '...', checkOut: '...' }
-        const booking = { id: Date.now(), type: 'HOTEL', ...data };
+        const booking = { id: Date.now(), type: 'HOTEL', status: 'Pending', ...data };
         recentHotelBookings.unshift(booking);
         if (recentHotelBookings.length > 50) recentHotelBookings.pop();
         io.emit('HOTEL_BOOKING_SYNC', recentHotelBookings);
+
+        allBookings.unshift(booking);
+        if (allBookings.length > 100) allBookings.pop();
+        io.emit('ALL_BOOKINGS_SYNC', allBookings);
+
         console.log(`[Socket] New hotel booking for ${data.patientName}`);
+    });
+
+    socket.on('SCAN_BOOKING_MADE', (data) => {
+        const booking = { id: Date.now(), type: 'SCAN', status: 'Pending', ...data };
+        recentScanBookings.unshift(booking);
+        if (recentScanBookings.length > 50) recentScanBookings.pop();
+        io.emit('SCAN_BOOKING_SYNC', recentScanBookings);
+
+        allBookings.unshift(booking);
+        if (allBookings.length > 100) allBookings.pop();
+        io.emit('ALL_BOOKINGS_SYNC', allBookings);
+
+        console.log(`[Socket] New scan booking for ${data.patientName}: ${data.scanType}`);
+    });
+
+    socket.on('VERIFY_BOOKING', async (id) => {
+        const booking = allBookings.find(b => b.id === id);
+        if (booking) {
+            booking.status = 'Verified';
+            io.emit('ALL_BOOKINGS_SYNC', allBookings);
+            console.log(`[Socket] Booking ${id} verified.`);
+            
+            // Sync last_visited to database
+            if (booking.huid || booking.number) {
+                try {
+                    let query = 'UPDATE customers_patients SET last_visited = CURRENT_DATE WHERE ';
+                    let params = [];
+                    if (booking.huid) {
+                        query += 'huid = $1';
+                        params.push(booking.huid);
+                    } else if (booking.number) {
+                        query += 'phone_number = $1';
+                        params.push(booking.number);
+                    }
+                    await db.pool.query(query, params);
+                    console.log(`[Socket] Synced last_visited for patient: ${booking.patientName}`);
+                } catch (err) {
+                    console.error('Failed to sync last_visited:', err);
+                }
+            }
+        }
     });
 
     socket.on('ADD_MISSED_CALL', (data) => {
