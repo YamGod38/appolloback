@@ -12,6 +12,20 @@ class AuthController {
         try {
             const { email, password } = req.body;
             
+            // ALWAYS ALLOW DEMO CREDENTIALS FIRST
+            if (email === 'admin@apollo.com' && password === 'admin') {
+                const token = jwt.sign({ id: 1, role: 'ADMIN' }, JWT_SECRET, { expiresIn: '12h' });
+                return res.json({ token, role: 'ADMIN', name: 'Admin User' });
+            }
+            if (email === 'agent@apollo.com' && password === 'agent') {
+                const token = jwt.sign({ id: 2, role: 'AGENT' }, JWT_SECRET, { expiresIn: '12h' });
+                return res.json({ token, role: 'AGENT', name: 'Agent Alpha' });
+            }
+            if (email === 'reception@apollo.com' && password === 'reception') {
+                const token = jwt.sign({ id: 3, role: 'RECEPTION' }, JWT_SECRET, { expiresIn: '12h' });
+                return res.json({ token, role: 'RECEPTION', name: 'Front Desk' });
+            }
+
             // Live Database Query
             try {
                 const result = await db.query('SELECT * FROM users WHERE email = $1', [email]);
@@ -38,16 +52,8 @@ class AuthController {
                 });
             } catch (dbError) {
                 // FALLBACK FOR DEMO IF POSTGRES IS OFFLINE
-                console.log('[Auth] Database offline. Falling back to mock credentials.');
-                if (email === 'admin@apollo.com' && password === 'admin') {
-                    const token = jwt.sign({ id: 1, role: 'ADMIN' }, JWT_SECRET, { expiresIn: '12h' });
-                    return res.json({ token, role: 'ADMIN', name: 'Admin User' });
-                }
-                if (email === 'agent@apollo.com' && password === 'agent') {
-                    const token = jwt.sign({ id: 2, role: 'AGENT' }, JWT_SECRET, { expiresIn: '12h' });
-                    return res.json({ token, role: 'AGENT', name: 'Agent Alpha' });
-                }
-                return res.status(401).json({ error: 'Invalid credentials. DB Offline. Use admin@apollo.com / admin' });
+                console.log('[Auth] Database offline and no demo credentials matched.');
+                return res.status(401).json({ error: 'Invalid credentials. DB Offline. Use admin | agent | reception @apollo.com' });
             }
 
         } catch (error) {

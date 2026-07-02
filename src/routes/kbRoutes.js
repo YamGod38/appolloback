@@ -3,7 +3,7 @@ const router = express.Router();
 const KnowledgeBaseModel = require('../models/KnowledgeBaseModel');
 const authMiddleware = require('../utils/authMiddleware');
 
-router.get('/search', async (req, res) => {
+router.get('/search', authMiddleware(), async (req, res) => {
     try {
         const { q } = req.query;
         if (!q) return res.json([]);

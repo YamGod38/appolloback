@@ -53,6 +53,16 @@ const whatsappRoutes = require('./routes/whatsappRoutes');
 const callRoutes = require('./routes/callRoutes');
 const attendanceRoutes = require('./routes/attendanceRoutes');
 
+// Global API Rate Limiter
+const apiLimiter = rateLimit({
+    windowMs: 15 * 60 * 1000, // 15 minutes
+    max: 200, // limit each IP to 200 requests per windowMs
+    message: { error: 'Too many requests from this IP, please try again after 15 minutes' },
+    standardHeaders: true,
+    legacyHeaders: false,
+});
+app.use('/api/', apiLimiter);
+
 // Serve uploaded files statically
 app.use('/uploads', express.static('uploads'));
 

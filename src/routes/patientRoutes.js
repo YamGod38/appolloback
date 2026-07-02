@@ -5,6 +5,18 @@ const { S3Client, PutObjectCommand } = require('@aws-sdk/client-s3');
 const db = require('../config/db');
 
 const authMiddleware = require('../utils/authMiddleware');
+const PatientController = require('../controllers/PatientController');
+
+// --- New CRUD Routes for Admin Userbase ---
+router.get('/', authMiddleware(), PatientController.getPatients);
+router.post('/', authMiddleware(), PatientController.createPatient);
+router.put('/:huid', authMiddleware(), PatientController.updatePatient);
+router.delete('/:huid', authMiddleware(['ADMIN']), PatientController.deletePatient);
+
+// --- Family Routes ---
+router.get('/:huid/family', authMiddleware(), PatientController.getFamily);
+router.post('/:huid/family', authMiddleware(), PatientController.addFamilyMember);
+router.delete('/family/:id', authMiddleware(), PatientController.deleteFamilyMember);
 
 // Memory storage keeps the file in RAM so we can blast it straight to S3
 const storage = multer.memoryStorage();
@@ -60,8 +72,8 @@ router.post('/:id/upload', authMiddleware(), upload.single('prescription'), asyn
 
 // Mock Data for HUID functionality (in-memory)
 let mockPatients = [
-    { id: 1, huid: 'AP-102948', name: 'John Doe', phone: '+1 (555) 123-0099', family_members: [], prescription_urls: ['https://mock-apollo-crm-storage.s3.amazonaws.com/prescriptions/sample-bill.pdf'] },
-    { id: 2, huid: 'AP-839201', name: 'Emma Watson', phone: '+1 (555) 882-3341', family_members: [{ id: 1, name: 'Tom Watson', relation: 'Son', age: 12 }], prescription_urls: [] }
+    { id: 1, huid: 'AP-102948', name: 'Rahul Sharma', phone: '+91 98765 43210', family_members: [], prescription_urls: ['https://mock-apollo-crm-storage.s3.amazonaws.com/prescriptions/sample-bill.pdf'] },
+    { id: 2, huid: 'AP-839201', name: 'Anjali Desai', phone: '+91 87654 32109', family_members: [{ id: 1, name: 'Vikram Desai', relation: 'Parent', age: 60 }], prescription_urls: [] }
 ];
 
 // GET /api/patients/search?query=...
@@ -94,31 +106,7 @@ router.get('/search', authMiddleware(), async (req, res) => {
     }
 });
 
-// POST /api/patients/:huid/family
-router.post('/:huid/family', authMiddleware(), async (req, res) => {
-    try {
-        const { huid } = req.params;
-        const { name, relation, age } = req.body;
-
-        try {
-            const dbRes = await db.query('INSERT INTO family_members (primary_huid, name, relation, age) VALUES ($1, $2, $3, $4) RETURNING *', [huid, name, relation, age]);
-            return res.json({ success: true, data: dbRes.rows[0] });
-        } catch (dbErr) {
-            console.warn('[Patients API] Database offline. Modifying mock data.');
-        }
-
-        const patient = mockPatients.find(p => p.huid === huid);
-        if (patient) {
-            const newMember = { id: Date.now(), name, relation, age };
-            patient.family_members.push(newMember);
-            res.json({ success: true, data: newMember });
-        } else {
-            res.status(404).json({ success: false, message: 'Primary HUID not found' });
-        }
-    } catch (err) {
-        res.status(500).json({ success: false, error: 'Failed to add family member' });
-    }
-});
+// (Removed old manual family route)
 
 // GET /api/patients/:huid/files
 router.get('/:huid/files', authMiddleware(), async (req, res) => {
@@ -178,7 +166,7 @@ router.get('/:phone/history', authMiddleware(), async (req, res) => {
         console.warn('[Patients API] Database offline. Returning mock interaction history.');
         res.json([
             { id: 1, type: 'call', date: '2026-06-10 14:30', summary: 'Patient asked about fasting rules before sugar test. Advised 12 hours.', agent: 'Alpha' },
-            { id: 2, type: 'upload', date: '2026-06-12 10:15', note: 'Uploaded updated prescription (Dr. Smith).' },
+            { id: 2, type: 'upload', date: '2026-06-12 10:15', note: 'Uploaded updated prescription (Dr. Gupta).' },
             { id: 3, type: 'call', date: '2026-06-15 09:00', summary: 'AI Summary: Routine check. BP stable. Set follow-up for 3 months.', agent: 'Delta' }
         ]);
     }
