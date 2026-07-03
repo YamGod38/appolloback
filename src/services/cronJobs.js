@@ -41,7 +41,8 @@ cron.schedule('0 8 * * *', async () => {
             };
 
             if (!whatsappToken || !phoneId) {
-                console.log(`[WhatsApp API MOCKED] Firing automated reminder to ${patient.phone_number} (${patient.full_name}).`);
+                console.log(`[WhatsApp API MOCKED] Dispatching Chronic Care Template to ${patient.phone_number}:`);
+                console.log(`> "Hello ${patient.full_name}, it's time for your 3-month post-surgery checkup. Reply 'BOOK' to auto-schedule."\n`);
             } else {
                 console.log(`[WhatsApp API LIVE] Dispatching Meta graph payload to ${patient.phone_number}...`);
                 try {

@@ -62,6 +62,17 @@ let recentHotelBookings = [];
 let recentScanBookings = [];
 let allBookings = []; // Unified list for Reception feed
 let missedCalls = []; // In-memory missed calls queue
+let hospitalBeds = [
+    { id: 'ICU-1', type: 'ICU', status: 'Occupied', patientName: 'John Doe', admissionDate: '2026-07-02T10:30:00Z', condition: 'Critical', attendingDoctor: 'Dr. Sarah Chen', notes: 'Continuous vitals monitoring required.' },
+    { id: 'ICU-2', type: 'ICU', status: 'Available', patientName: null, admissionDate: null, condition: null, attendingDoctor: null, notes: null },
+    { id: 'ICU-3', type: 'ICU', status: 'Available', patientName: null, admissionDate: null, condition: null, attendingDoctor: null, notes: null },
+    { id: 'GEN-1', type: 'General', status: 'Occupied', patientName: 'Jane Smith', admissionDate: '2026-07-03T14:15:00Z', condition: 'Stable', attendingDoctor: 'Dr. James Wilson', notes: 'Awaiting lab results.' },
+    { id: 'GEN-2', type: 'General', status: 'Cleaning', patientName: null, admissionDate: null, condition: null, attendingDoctor: null, notes: null },
+    { id: 'GEN-3', type: 'General', status: 'Available', patientName: null, admissionDate: null, condition: null, attendingDoctor: null, notes: null },
+    { id: 'GEN-4', type: 'General', status: 'Available', patientName: null, admissionDate: null, condition: null, attendingDoctor: null, notes: null },
+    { id: 'OT-1', type: 'Operating Theater', status: 'Available', patientName: null, admissionDate: null, condition: null, attendingDoctor: null, notes: null },
+    { id: 'OT-2', type: 'Operating Theater', status: 'Available', patientName: null, admissionDate: null, condition: null, attendingDoctor: null, notes: null }
+];
 let adminMemo = "MRI Room B is undergoing scheduled maintenance until 2:00 PM. Route all acute trauma to Room A.";
 app.set('missedCalls', missedCalls);
 
@@ -82,6 +93,7 @@ io.on('connection', (socket) => {
     socket.emit('SCAN_TYPES_SYNC', scanTypes);
     socket.emit('ROUTING_STATE_SYNC', app.get('globalCallRouting'));
     socket.emit('ADMIN_MEMO_SYNC', adminMemo);
+    socket.emit('BED_STATUS_SYNC', hospitalBeds);
 
     // Provide state on demand for late-mounting components
     socket.on('GET_INITIAL_STATE', () => {
@@ -95,6 +107,7 @@ io.on('connection', (socket) => {
         socket.emit('ALL_BOOKINGS_SYNC', allBookings);
         socket.emit('ROUTING_STATE_SYNC', app.get('globalCallRouting'));
         socket.emit('ADMIN_MEMO_SYNC', adminMemo);
+        socket.emit('BED_STATUS_SYNC', hospitalBeds);
     });
 
     // Listen for admin updating routing state
@@ -111,6 +124,29 @@ io.on('connection', (socket) => {
             doctors[docIndex].status = status;
             io.emit('DOCTOR_STATUS_SYNC', doctors);
             console.log(`[Socket] Doctor ${id} status updated to ${status}`);
+        }
+    });
+
+    // Listen for bed status updates
+    socket.on('UPDATE_BED_STATUS', (payload) => {
+        const bedIndex = hospitalBeds.findIndex(b => b.id === payload.id);
+        if (bedIndex !== -1) {
+            hospitalBeds[bedIndex].status = payload.status;
+            if (payload.status === 'Occupied') {
+                hospitalBeds[bedIndex].patientName = payload.patientName || null;
+                hospitalBeds[bedIndex].admissionDate = payload.admissionDate || new Date().toISOString();
+                hospitalBeds[bedIndex].condition = payload.condition || 'Stable';
+                hospitalBeds[bedIndex].attendingDoctor = payload.attendingDoctor || 'Unassigned';
+                hospitalBeds[bedIndex].notes = payload.notes || '';
+            } else {
+                hospitalBeds[bedIndex].patientName = null;
+                hospitalBeds[bedIndex].admissionDate = null;
+                hospitalBeds[bedIndex].condition = null;
+                hospitalBeds[bedIndex].attendingDoctor = null;
+                hospitalBeds[bedIndex].notes = null;
+            }
+            io.emit('BED_STATUS_SYNC', hospitalBeds);
+            console.log(`[Socket] Bed ${payload.id} status updated to ${payload.status}`);
         }
     });
 
@@ -160,6 +196,12 @@ io.on('connection', (socket) => {
         doctors = doctors.filter(d => d.id !== id);
         io.emit('DOCTOR_STATUS_SYNC', doctors);
         console.log(`[Socket] Doctor removed: ${id}`);
+    });
+
+    // Listen for emergency escalations from agents
+    socket.on('EMERGENCY_ESCALATION', (data) => {
+        io.emit('EMERGENCY_ESCALATION', data);
+        console.log(`[Socket] EMERGENCY ESCALATION from ${data.agentName} to ${data.department}`);
     });
 
     // Listen for adding a new scan type
@@ -217,45 +259,77 @@ io.on('connection', (socket) => {
         }
     });
 
-    socket.on('BOOKING_MADE', (data) => {
-        // data: { patientName: 'John Doe', doctor: 'dr_smith', date: '...', time: '...' }
-        const booking = { id: Date.now(), type: 'APPOINTMENT', status: 'Pending', ...data };
-        recentBookings.unshift(booking);
-        if (recentBookings.length > 50) recentBookings.pop();
-        io.emit('BOOKING_SYNC', recentBookings);
+    socket.on('BOOKING_MADE', async (data) => {
+        try {
+            const result = await db.pool.query(
+                `INSERT INTO bookings (type, patient_name, huid, phone_number, details, booking_date, booking_time, agent_name, status) 
+                 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9) RETURNING *`,
+                ['APPOINTMENT', data.patientName, data.huid, data.number, `Dr. ${data.doctor}`, data.date, data.time, data.agentName, 'Pending']
+            );
+            const booking = result.rows[0];
+            recentBookings.unshift(booking);
+            if (recentBookings.length > 50) recentBookings.pop();
+            io.emit('BOOKING_SYNC', recentBookings);
 
-        allBookings.unshift(booking);
-        if (allBookings.length > 100) allBookings.pop();
-        io.emit('ALL_BOOKINGS_SYNC', allBookings);
-        
-        console.log(`[Socket] New appointment booking for ${data.patientName}`);
+            allBookings.unshift(booking);
+            if (allBookings.length > 100) allBookings.pop();
+            io.emit('ALL_BOOKINGS_SYNC', allBookings);
+            console.log(`[Socket] New appointment booking saved to DB for ${data.patientName}`);
+        } catch (err) { console.error('DB Error', err); }
     });
 
-    socket.on('HOTEL_BOOKING_MADE', (data) => {
-        // data: { patientName: 'John Doe', hotel: 'The Grand', roomType: '...', checkIn: '...', checkOut: '...' }
-        const booking = { id: Date.now(), type: 'HOTEL', status: 'Pending', ...data };
-        recentHotelBookings.unshift(booking);
-        if (recentHotelBookings.length > 50) recentHotelBookings.pop();
-        io.emit('HOTEL_BOOKING_SYNC', recentHotelBookings);
+    socket.on('HOTEL_BOOKING_MADE', async (data) => {
+        try {
+            const result = await db.pool.query(
+                `INSERT INTO bookings (type, patient_name, huid, phone_number, details, booking_date, booking_time, agent_name, status) 
+                 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9) RETURNING *`,
+                ['HOTEL', data.patientName, data.huid, data.number, `${data.hotel} - ${data.roomType}`, data.checkIn, 'Check-in', data.agentName, 'Pending']
+            );
+            const booking = result.rows[0];
+            recentHotelBookings.unshift(booking);
+            if (recentHotelBookings.length > 50) recentHotelBookings.pop();
+            io.emit('HOTEL_BOOKING_SYNC', recentHotelBookings);
 
-        allBookings.unshift(booking);
-        if (allBookings.length > 100) allBookings.pop();
-        io.emit('ALL_BOOKINGS_SYNC', allBookings);
-
-        console.log(`[Socket] New hotel booking for ${data.patientName}`);
+            allBookings.unshift(booking);
+            if (allBookings.length > 100) allBookings.pop();
+            io.emit('ALL_BOOKINGS_SYNC', allBookings);
+            console.log(`[Socket] New hotel booking saved to DB for ${data.patientName}`);
+        } catch (err) { console.error('DB Error', err); }
     });
 
-    socket.on('SCAN_BOOKING_MADE', (data) => {
-        const booking = { id: Date.now(), type: 'SCAN', status: 'Pending', ...data };
-        recentScanBookings.unshift(booking);
-        if (recentScanBookings.length > 50) recentScanBookings.pop();
-        io.emit('SCAN_BOOKING_SYNC', recentScanBookings);
+    socket.on('SCAN_BOOKING_MADE', async (data) => {
+        try {
+            const result = await db.pool.query(
+                `INSERT INTO bookings (type, patient_name, huid, phone_number, details, booking_date, booking_time, agent_name, status) 
+                 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9) RETURNING *`,
+                ['SCAN', data.patientName, data.huid, data.number, data.scanType, data.date, data.time, data.agentName, 'Pending']
+            );
+            const booking = result.rows[0];
+            recentScanBookings.unshift(booking);
+            if (recentScanBookings.length > 50) recentScanBookings.pop();
+            io.emit('SCAN_BOOKING_SYNC', recentScanBookings);
 
-        allBookings.unshift(booking);
-        if (allBookings.length > 100) allBookings.pop();
-        io.emit('ALL_BOOKINGS_SYNC', allBookings);
+            allBookings.unshift(booking);
+            if (allBookings.length > 100) allBookings.pop();
+            io.emit('ALL_BOOKINGS_SYNC', allBookings);
+            console.log(`[Socket] New scan booking saved to DB for ${data.patientName}: ${data.scanType}`);
+        } catch (err) { console.error('DB Error', err); }
+    });
 
-        console.log(`[Socket] New scan booking for ${data.patientName}: ${data.scanType}`);
+    socket.on('BLOOD_COLLECTION_MADE', async (data) => {
+        try {
+            const result = await db.pool.query(
+                `INSERT INTO bookings (type, patient_name, huid, phone_number, details, booking_date, booking_time, agent_name, address, status) 
+                 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10) RETURNING *`,
+                ['BLOOD_COLLECTION', data.patientName, data.huid, data.number, data.notes, data.date, data.time, data.agentName, data.address, 'Pending']
+            );
+            const booking = result.rows[0];
+            // No specific array for blood, just add to allBookings
+            allBookings.unshift(booking);
+            if (allBookings.length > 100) allBookings.pop();
+            io.emit('ALL_BOOKINGS_SYNC', allBookings);
+            console.log(`[Socket] New blood collection booking saved to DB for ${data.patientName}`);
+        } catch (err) { console.error('DB Error', err); }
     });
 
     socket.on('VERIFY_BOOKING', async (id) => {
@@ -285,6 +359,26 @@ io.on('connection', (socket) => {
             }
         }
     });
+
+    socket.on('UPDATE_PATIENT_PROFILE', async (data) => {
+        try {
+            if (data.huid) {
+                await db.pool.query(
+                    'UPDATE customers_patients SET full_name = $1, phone_number = $2 WHERE huid = $3',
+                    [data.patientName, data.phoneNumber, data.huid]
+                );
+            } else if (data.phoneNumber) {
+                await db.pool.query(
+                    'UPDATE customers_patients SET full_name = $1 WHERE phone_number = $2',
+                    [data.patientName, data.phoneNumber]
+                );
+            }
+            console.log(`[Socket] Patient profile updated for: ${data.patientName}`);
+        } catch (err) {
+            console.error('Failed to update patient profile:', err);
+        }
+    });
+
 
     socket.on('ADD_MISSED_CALL', (data) => {
         const call = { id: Date.now(), ...data, status: 'Pending', timestamp: new Date().toISOString() };

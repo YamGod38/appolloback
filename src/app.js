@@ -52,6 +52,8 @@ const leadRoutes = require('./routes/leadRoutes');
 const whatsappRoutes = require('./routes/whatsappRoutes');
 const callRoutes = require('./routes/callRoutes');
 const attendanceRoutes = require('./routes/attendanceRoutes');
+const bookingRoutes = require('./routes/bookingRoutes');
+const feedbackRoutes = require('./routes/feedbackRoutes');
 
 // Global API Rate Limiter
 const apiLimiter = rateLimit({
@@ -85,4 +87,6 @@ app.use('/api/leads', leadRoutes);
 app.use('/api/whatsapp', whatsappRoutes);
 app.use('/api/calls', callRoutes);
 app.use('/api/attendance', attendanceRoutes);
+app.use('/api/bookings', bookingRoutes);
+app.use('/api/feedback', feedbackRoutes);
 module.exports = app;

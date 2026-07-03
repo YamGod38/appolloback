@@ -11,24 +11,26 @@ class AuthController {
     static async login(req, res) {
         try {
             const { email, password } = req.body;
+            const normalizedEmail = email ? email.trim().toLowerCase() : '';
+            const normalizedPassword = password ? password.trim() : '';
             
             // ALWAYS ALLOW DEMO CREDENTIALS FIRST
-            if (email === 'admin@apollo.com' && password === 'admin') {
+            if (normalizedEmail === 'admin@apollo.com' && normalizedPassword === 'admin') {
                 const token = jwt.sign({ id: 1, role: 'ADMIN' }, JWT_SECRET, { expiresIn: '12h' });
                 return res.json({ token, role: 'ADMIN', name: 'Admin User' });
             }
-            if (email === 'agent@apollo.com' && password === 'agent') {
+            if (normalizedEmail === 'agent@apollo.com' && normalizedPassword === 'agent') {
                 const token = jwt.sign({ id: 2, role: 'AGENT' }, JWT_SECRET, { expiresIn: '12h' });
                 return res.json({ token, role: 'AGENT', name: 'Agent Alpha' });
             }
-            if (email === 'reception@apollo.com' && password === 'reception') {
+            if (normalizedEmail === 'reception@apollo.com' && normalizedPassword === 'reception') {
                 const token = jwt.sign({ id: 3, role: 'RECEPTION' }, JWT_SECRET, { expiresIn: '12h' });
                 return res.json({ token, role: 'RECEPTION', name: 'Front Desk' });
             }
 
             // Live Database Query
             try {
-                const result = await db.query('SELECT * FROM users WHERE email = $1', [email]);
+                const result = await db.query('SELECT * FROM users WHERE email = $1', [normalizedEmail]);
                 
                 if (result.rows.length === 0) {
                     return res.status(401).json({ error: 'Invalid credentials. User not found.' });

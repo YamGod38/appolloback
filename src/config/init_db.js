@@ -122,6 +122,40 @@ const executeMigration = async () => {
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             );
         `);
+
+        // 9. Smart Beds Table
+        await pool.query(`
+            CREATE TABLE IF NOT EXISTS hospital_beds (
+                id VARCHAR(50) PRIMARY KEY,
+                ward_type VARCHAR(50) NOT NULL,
+                status VARCHAR(50) DEFAULT 'Available',
+                patient_name VARCHAR(255),
+                assigned_at TIMESTAMP
+            );
+        `);
+
+        console.log('[DB] Seeding Hospital Beds...');
+        // Only insert if empty
+        const bedCount = await pool.query('SELECT COUNT(*) FROM hospital_beds');
+        if (parseInt(bedCount.rows[0].count) === 0) {
+            const beds = [];
+            // 12 ICU Beds
+            for (let i=1; i<=12; i++) beds.push(`('ICU-${i}', 'ICU', 'Available', NULL)`);
+            // 20 General Beds
+            for (let i=1; i<=20; i++) beds.push(`('GEN-${i}', 'General', 'Available', NULL)`);
+            // 4 OTs
+            for (let i=1; i<=4; i++) beds.push(`('OT-${i}', 'OT', 'Available', NULL)`);
+            
+            // Make a few occupied for realism
+            beds[0] = `('ICU-1', 'ICU', 'Occupied', 'John Doe')`;
+            beds[1] = `('ICU-2', 'ICU', 'Occupied', 'Jane Smith')`;
+            beds[12] = `('GEN-1', 'General', 'Occupied', 'Robert Johnson')`;
+
+            await pool.query(`
+                INSERT INTO hospital_beds (id, ward_type, status, patient_name)
+                VALUES ${beds.join(', ')}
+            `);
+        }
         const adminHash = await bcrypt.hash('admin', 10);
         const agentHash = await bcrypt.hash('agent', 10);
 
