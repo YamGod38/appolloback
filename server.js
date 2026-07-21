@@ -61,6 +61,7 @@ let recentBookings = [];
 let recentHotelBookings = [];
 let recentScanBookings = [];
 let allBookings = []; // Unified list for Reception feed
+let serviceCatalog = []; // Live service catalog
 let missedCalls = []; // In-memory missed calls queue
 let hospitalBeds = [
     { id: 'ICU-1', type: 'ICU', status: 'Occupied', patientName: 'John Doe', admissionDate: '2026-07-02T10:30:00Z', condition: 'Critical', attendingDoctor: 'Dr. Sarah Chen', notes: 'Continuous vitals monitoring required.' },
@@ -76,12 +77,20 @@ let hospitalBeds = [
 let adminMemo = "MRI Room B is undergoing scheduled maintenance until 2:00 PM. Route all acute trauma to Room A.";
 app.set('missedCalls', missedCalls);
 
-db.pool.connect((err, client, release) => {
+db.pool.connect(async (err, client, release) => {
     if (err) {
         return console.error('Error acquiring Postgres client.', err.message);
     }
     console.log('Postgres DB connected successfully.');
     release();
+
+    try {
+        const res = await db.pool.query('SELECT * FROM service_catalog ORDER BY id ASC');
+        serviceCatalog = res.rows;
+        console.log(`Loaded ${serviceCatalog.length} services into catalog.`);
+    } catch (e) {
+        console.error('Failed to load service catalog:', e);
+    }
 });
 
 io.on('connection', (socket) => {
@@ -94,6 +103,7 @@ io.on('connection', (socket) => {
     socket.emit('ROUTING_STATE_SYNC', app.get('globalCallRouting'));
     socket.emit('ADMIN_MEMO_SYNC', adminMemo);
     socket.emit('BED_STATUS_SYNC', hospitalBeds);
+    socket.emit('SERVICE_CATALOG_SYNC', serviceCatalog);
 
     // Provide state on demand for late-mounting components
     socket.on('GET_INITIAL_STATE', () => {
@@ -108,8 +118,32 @@ io.on('connection', (socket) => {
         socket.emit('ROUTING_STATE_SYNC', app.get('globalCallRouting'));
         socket.emit('ADMIN_MEMO_SYNC', adminMemo);
         socket.emit('BED_STATUS_SYNC', hospitalBeds);
+        socket.emit('SERVICE_CATALOG_SYNC', serviceCatalog);
     });
 
+    socket.on('UPDATE_SERVICE', async (data) => {
+        try {
+            await db.pool.query(
+                'UPDATE service_catalog SET name = $1, price = $2, duration = $3, tier = $4 WHERE id = $5',
+                [data.name, data.price, data.duration, data.tier, data.id]
+            );
+            const res = await db.pool.query('SELECT * FROM service_catalog ORDER BY id ASC');
+            serviceCatalog = res.rows;
+            io.emit('SERVICE_CATALOG_SYNC', serviceCatalog);
+            console.log(`[Socket] Service ${data.id} updated`);
+        } catch (err) {
+            console.error('Failed to update service:', err);
+        }
+    });
+    socket.on('ESCALATE_CALL', (data) => {
+        console.log(`[Socket] Call escalated from ${data.from}`);
+        io.emit('ADMIN_INCOMING_CALL', data);
+    });
+
+    socket.on('RETURN_ESCALATED_CALL', (data) => {
+        console.log(`[Socket] Escalated call returned to agent`);
+        io.emit('INCOMING_CALL', data.call); // Re-broadcast to agents (or specific agent if targeted)
+    });
     // Listen for admin updating routing state
     socket.on('UPDATE_ROUTING_STATE', (state) => {
         app.set('globalCallRouting', state);
@@ -261,12 +295,41 @@ io.on('connection', (socket) => {
 
     socket.on('BOOKING_MADE', async (data) => {
         try {
+            // Calculate Token Number dynamically based on in-memory queue
+            // Find existing bookings for this specific date, time block, and doctor
+            const existingInSlot = allBookings.filter(b => 
+                b.type === 'APPOINTMENT' && 
+                b.booking_date === data.date && 
+                b.booking_time === data.time && 
+                b.details.includes(data.doctor)
+            );
+            
+            const currentQueueLength = existingInSlot.length;
+            let tokenNumber = '';
+            
+            if (data.priority === 'Critical') {
+                // Priority tokens jump the queue (e.g., P1, P2)
+                const priorityCount = existingInSlot.filter(b => b.token_number && b.token_number.startsWith('P')).length;
+                tokenNumber = `P${priorityCount + 1}`;
+            } else {
+                // Routine tokens
+                tokenNumber = `${currentQueueLength + 1}`;
+            }
+
+            // In a real production environment, this would be a DB transaction with row-level locking.
+            // For now, we append the token info to the details column to avoid schema migrations.
+            const enhancedDetails = `Dr. ${data.doctor} (Token: ${tokenNumber})`;
+
             const result = await db.pool.query(
                 `INSERT INTO bookings (type, patient_name, huid, phone_number, details, booking_date, booking_time, agent_name, status) 
                  VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9) RETURNING *`,
-                ['APPOINTMENT', data.patientName, data.huid, data.number, `Dr. ${data.doctor}`, data.date, data.time, data.agentName, 'Pending']
+                ['APPOINTMENT', data.patientName, data.huid, data.number, enhancedDetails, data.date, data.time, data.agentName, 'Pending']
             );
+            
             const booking = result.rows[0];
+            booking.token_number = tokenNumber; // Inject token for frontend
+            booking.priority = data.priority || 'Routine';
+
             recentBookings.unshift(booking);
             if (recentBookings.length > 50) recentBookings.pop();
             io.emit('BOOKING_SYNC', recentBookings);
@@ -274,7 +337,11 @@ io.on('connection', (socket) => {
             allBookings.unshift(booking);
             if (allBookings.length > 100) allBookings.pop();
             io.emit('ALL_BOOKINGS_SYNC', allBookings);
-            console.log(`[Socket] New appointment booking saved to DB for ${data.patientName}`);
+            
+            // Send specific success message back to the agent who booked it
+            socket.emit('BOOKING_CONFIRMED', { ...booking, token_number: tokenNumber });
+            
+            console.log(`[Socket] New appointment booking saved. Token ${tokenNumber} assigned for ${data.patientName}`);
         } catch (err) { console.error('DB Error', err); }
     });
 
@@ -333,30 +400,37 @@ io.on('connection', (socket) => {
     });
 
     socket.on('VERIFY_BOOKING', async (id) => {
-        const booking = allBookings.find(b => b.id === id);
-        if (booking) {
-            booking.status = 'Verified';
+        try {
+            // Update the DB unconditionally
+            const result = await db.pool.query('UPDATE bookings SET status = $1 WHERE id = $2 RETURNING *', ['Verified', id]);
+            
+            // Update in-memory if it exists
+            const bookingInMem = allBookings.find(b => b.id === id);
+            if (bookingInMem) {
+                bookingInMem.status = 'Verified';
+            }
+            
             io.emit('ALL_BOOKINGS_SYNC', allBookings);
             console.log(`[Socket] Booking ${id} verified.`);
+
+            const booking = result.rows[0] || bookingInMem;
             
             // Sync last_visited to database
-            if (booking.huid || booking.number) {
-                try {
-                    let query = 'UPDATE customers_patients SET last_visited = CURRENT_DATE WHERE ';
-                    let params = [];
-                    if (booking.huid) {
-                        query += 'huid = $1';
-                        params.push(booking.huid);
-                    } else if (booking.number) {
-                        query += 'phone_number = $1';
-                        params.push(booking.number);
-                    }
-                    await db.pool.query(query, params);
-                    console.log(`[Socket] Synced last_visited for patient: ${booking.patientName}`);
-                } catch (err) {
-                    console.error('Failed to sync last_visited:', err);
+            if (booking && (booking.huid || booking.phone_number || booking.number)) {
+                let query = 'UPDATE customers_patients SET last_visited = CURRENT_DATE WHERE ';
+                let params = [];
+                if (booking.huid) {
+                    query += 'huid = $1';
+                    params.push(booking.huid);
+                } else {
+                    query += 'phone_number = $1';
+                    params.push(booking.phone_number || booking.number);
                 }
+                await db.pool.query(query, params);
+                console.log(`[Socket] Synced last_visited for patient: ${booking.patient_name || booking.patientName}`);
             }
+        } catch (err) {
+            console.error('Failed to verify booking in DB:', err);
         }
     });
 
